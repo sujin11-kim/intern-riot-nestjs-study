@@ -34,6 +34,7 @@ export class RiotService {
     }
   }
 
+  // controller - 소환사 정보 조회
   async getSummonerByPuuid(puuid: string) {
     try {
       const summoner = await this.prisma.summoner.findUnique({
@@ -51,6 +52,7 @@ export class RiotService {
     }
   }
 
+  // controller - 경기에 참가한 소환사 조회
   async getSummonersByMatchId(matchId: string) {
     try {
       const participants = await this.prisma.participant.findMany({
@@ -61,6 +63,34 @@ export class RiotService {
     } catch (error) {
       console.error('Error retrieving summoners by match ID:', error);
       throw new Error('Failed to retrieve summoners');
+    }
+  }
+
+  // controller - 소환사의 최근 10개 매치 반환
+  async getRecentMatchesByPuuid(puuid: string) {
+    try {
+      // 최근 10개 매치 가져오기
+      const matchIds = await this.rAPI.matchV5.getIdsByPuuid({
+        cluster: PlatformId.ASIA,
+        puuid: puuid,
+        params: { start: 0, count: 10 },
+      });
+
+      // 각 매치 ID에 대한 매치의 metadata 반환
+      const matchMetadata = await Promise.all(
+        matchIds.map(async (matchId) => {
+          const match = await this.rAPI.matchV5.getMatchById({
+            cluster: PlatformId.ASIA,
+            matchId: matchId,
+          });
+          return match.metadata;
+        }),
+      );
+
+      return { matches: matchMetadata };
+    } catch (error) {
+      console.error('Error retrieving recent matches:', error);
+      throw new Error('Failed to retrieve recent matches');
     }
   }
 
@@ -208,10 +238,13 @@ export class RiotService {
       }
 
       console.log(
-        `게임 데이터 및 참가자 정보가 match ID: ${matchId}에 대해 저장되었습니다.`,
+        `Game data and participant information has been saved for match ID: ${matchId}.`,
       );
     } catch (error) {
-      console.error('게임 데이터 및 참가자 정보 저장 중 오류 발생:', error);
+      console.error(
+        'Error occurred while saving game data and participant information:',
+        error,
+      );
     }
   }
 }
