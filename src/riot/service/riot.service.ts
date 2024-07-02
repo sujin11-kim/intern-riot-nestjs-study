@@ -18,6 +18,22 @@ export class RiotService {
     this.rAPI = new RiotAPI(riotApiKey);
   }
 
+  // controller - 경기 리스트 반환
+  async getAllMatches() {
+    try {
+      const matches = await this.prisma.match.findMany({
+        select: { matchId: true }, // 오직 matchId만 선택하여 가져옵니다.
+      });
+
+      const matchIds = matches.map((match) => match.matchId); // matchId만 추출합니다.
+
+      return { matchIds }; // 'match' 키를 사용하여 matchId 리스트를 반환합니다.
+    } catch (error) {
+      console.error('Error retrieving all matches:', error);
+      throw new Error('Failed to retrieve matches');
+    }
+  }
+
   // 모듈이 초기화될 때 자동으로 실행, 초기 소환사 지정
   async onModuleInit() {
     try {
