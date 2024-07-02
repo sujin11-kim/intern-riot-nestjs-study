@@ -34,6 +34,23 @@ export class RiotService {
     }
   }
 
+  async getSummonerByPuuid(puuid: string) {
+    try {
+      const summoner = await this.prisma.summoner.findUnique({
+        where: { puuid },
+      });
+
+      if (!summoner) {
+        throw new Error(`No summoner found with puuid: ${puuid}`);
+      }
+
+      return summoner;
+    } catch (error) {
+      console.error('Error retrieving summoner:', error);
+      throw new Error('Failed to retrieve summoner');
+    }
+  }
+
   async getSummonersByMatchId(matchId: string) {
     try {
       const participants = await this.prisma.participant.findMany({
