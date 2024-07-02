@@ -1,19 +1,30 @@
 import { Injectable } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
-import { RiotAPI, PlatformId } from '@fightmegg/riot-api';
+import { RiotAPI, PlatformId, RiotAPITypes } from '@fightmegg/riot-api';
+import { PrismaService } from '../../../prisma/prisma.service';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class RiotService {
-  private readonly RIOT_API_KEY = 'RGAPI-3eac3794-a86d-42c0-a59e-3df119f0c5e8';
-  private rAPI = new RiotAPI(this.RIOT_API_KEY);
+  private rAPI: RiotAPI;
   private initialSummonerGameId: string | null = null; // 초기 소환사의 matchId
   private initialSummonerPuuid: string | null = null; // 매분마다 갱신될 초기 소환사
 
-  constructor() {}
+  constructor(
+    private prisma: PrismaService,
+    private configService: ConfigService,
+  ) {
+    const riotApiKey = this.configService.get<string>('RIOT_API_KEY');
+    this.rAPI = new RiotAPI(riotApiKey);
+  }
 
   // 모듈이 초기화될 때 자동으로 실행, 초기 소환사 지정
   async onModuleInit() {
-    await this.updateInitialSummoner('hide on bush', 'KR1');
+    try {
+      await this.updateInitialSummoner('hide on bush', 'KR1');
+    } catch (error) {
+      console.error('Failed to initialize summoner:', error);
+    }
   }
 
   // 초기 소환사의 최근 matchId 업데이트
@@ -57,44 +68,43 @@ export class RiotService {
 
       // 해당 게임에 참여한 1~10명의 소환사의 최근 게임 정보 조회
       for (const participant of matchDetails.info.participants.slice(0, 2)) {
-        const puuid = participant.puuid;
-        const recentGameId = await this.fetchRecentGameIdByPuuid(puuid);
+        const recentGameId = await this.fetchRecentGameIdByPuuid(
+          participant.puuid,
+        );
         console.log(
           `Recent game for ${participant.summonerName}: ${recentGameId}`,
         );
 
         if (recentGameId) {
-          // 참여한 소환사들의 최근 게임의 10명의 참여자들 게임 가져오기
           const participantDetails = await this.rAPI.matchV5.getMatchById({
             cluster: PlatformId.ASIA,
             matchId: recentGameId,
           });
-          participantDetails.info.participants.forEach(async (p) => {
-            const subRecentGameId = await this.fetchRecentGameIdByPuuid(
-              p.puuid,
-            );
 
+          // 해당 참가자의 최근 게임의 모든 참가자들의 최근 게임을 조회하여 저장
+          for (const subParticipant of participantDetails.info.participants) {
+            const subRecentGameId = await this.fetchRecentGameIdByPuuid(
+              subParticipant.puuid,
+            );
             if (subRecentGameId) {
-              // 게임의 정보 가져오기
-              const gameDetails = await this.rAPI.matchV5.getMatchById({
-                cluster: PlatformId.ASIA,
-                matchId: subRecentGameId,
-              });
-              console.log(
-                `Subsequent game details for ${p.summonerName}:`,
-                gameDetails,
-              );
-            } else {
-              console.log(`No recent game found for ${p.summonerName}`);
+              const subParticipantDetails =
+                await this.rAPI.matchV5.getMatchById({
+                  cluster: PlatformId.ASIA,
+                  matchId: subRecentGameId,
+                });
+              await this.saveGameDataAndParticipants(subParticipantDetails);
             }
-          });
+          }
         }
       }
       const randomParticipant =
         matchDetails.info.participants[
           Math.floor(Math.random() * matchDetails.info.participants.length)
         ];
-      await this.updateInitialSummoner(randomParticipant.summonerName, 'KR1');
+      await this.updateInitialSummoner(
+        randomParticipant.summonerName,
+        randomParticipant.riotIdTagline,
+      );
     } catch (error) {
       console.error('Error fetching matches:', error);
     }
@@ -107,5 +117,55 @@ export class RiotService {
       params: { start: 0, count: 1 },
     });
     return games[0]; // 가장 최근 게임 ID 반환
+  }
+
+  async saveGameDataAndParticipants(
+    gameDetails: RiotAPITypes.MatchV5.MatchDTO,
+  ) {
+    try {
+      const { dataVersion, matchId } = gameDetails.metadata; // 메타데이터에서 매치 정보 추출
+      const participants = gameDetails.info.participants; // 참가자 정보 추출
+
+      // 매치 레코드 생성 또는 업데이트
+      await this.prisma.match.upsert({
+        where: { matchId: matchId },
+        update: { dataVersion: dataVersion },
+        create: {
+          matchId: matchId,
+          dataVersion: dataVersion,
+        },
+      });
+
+      // 각 참가자에 대한 Summoner 레코드 관리
+      for (const participant of participants) {
+        // 각 참가자의 Summoner 레코드 생성 또는 업데이트
+        const summoner = await this.prisma.summoner.upsert({
+          where: { puuid: participant.puuid },
+          update: {
+            riotId: participant.summonerName,
+            tagLine: participant.riotIdTagline,
+          },
+          create: {
+            puuid: participant.puuid,
+            riotId: participant.summonerName,
+            tagLine: participant.riotIdTagline,
+          },
+        });
+
+        // 매치와 소환사를 연결하는 참가자 항목 생성
+        await this.prisma.participant.create({
+          data: {
+            matchId: matchId,
+            summonerPuuid: summoner.puuid,
+          },
+        });
+      }
+
+      console.log(
+        `게임 데이터 및 참가자 정보가 match ID: ${matchId}에 대해 저장되었습니다.`,
+      );
+    } catch (error) {
+      console.error('게임 데이터 및 참가자 정보 저장 중 오류 발생:', error);
+    }
   }
 }
