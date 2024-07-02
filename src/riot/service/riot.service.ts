@@ -22,12 +22,12 @@ export class RiotService {
   async getAllMatches() {
     try {
       const matches = await this.prisma.match.findMany({
-        select: { matchId: true }, // 오직 matchId만 선택하여 가져옵니다.
+        select: { matchId: true }, // 디비에 저장된 matchId 조회
       });
 
-      const matchIds = matches.map((match) => match.matchId); // matchId만 추출합니다.
+      const matchIds = matches.map((match) => match.matchId); // 리스트로 생성
 
-      return { matchIds }; // 'match' 키를 사용하여 matchId 리스트를 반환합니다.
+      return { matchIds }; // matchId 리스트 반환
     } catch (error) {
       console.error('Error retrieving all matches:', error);
       throw new Error('Failed to retrieve matches');
@@ -38,6 +38,7 @@ export class RiotService {
   async getSummonerByPuuid(puuid: string) {
     try {
       const summoner = await this.prisma.summoner.findUnique({
+        // puuid로 디비에 저장된 소환사 정보 조회
         where: { puuid },
       });
 
@@ -56,10 +57,11 @@ export class RiotService {
   async getSummonersByMatchId(matchId: string) {
     try {
       const participants = await this.prisma.participant.findMany({
+        // matchId에 참가한 소환사 조회
         where: { matchId: matchId },
       });
 
-      return { participants }; // 'summoners' 키로 puuid 리스트 반환
+      return { participants };
     } catch (error) {
       console.error('Error retrieving summoners by match ID:', error);
       throw new Error('Failed to retrieve summoners');
