@@ -7,8 +7,7 @@ import { ConfigService } from '@nestjs/config';
 @Injectable()
 export class RiotService {
   private rAPI: RiotAPI;
-  private initialSummonerGameId: string | null = null; // 초기 소환사의 matchId
-  private initialSummonerPuuid: string | null = null; // 매분마다 갱신될 초기 소환사
+  private initialMatchId: string | null = 'KR_7132207284'; // 초기 matchId
 
   constructor(
     private prisma: PrismaService,
@@ -113,105 +112,68 @@ export class RiotService {
     }
   }
 
-  // 모듈이 초기화될 때 자동으로 실행, 초기 소환사 지정
-  async onModuleInit() {
-    try {
-      await this.updateInitialSummoner('hide on bush', 'KR1');
-    } catch (error) {
-      console.error('Failed to initialize summoner:', error);
-    }
-  }
-
-  // 초기 소환사의 최근 matchId 업데이트
-  async updateInitialSummoner(gameName: string, tagLine: string) {
-    // 초기 소환사 정보 가져오기
-    const summonerInfo = await this.rAPI.account.getByRiotId({
-      region: PlatformId.ASIA,
-      gameName: gameName,
-      tagLine: tagLine,
-    });
-    this.initialSummonerPuuid = summonerInfo.puuid;
-    // 해당 소환사의 최근 게임 목록 조회
-    const recentGames = await this.rAPI.matchV5.getIdsByPuuid({
-      cluster: PlatformId.ASIA,
-      puuid: this.initialSummonerPuuid,
-      params: { start: 0, count: 1 },
-    });
-    // 초기 게임 지정
-    this.initialSummonerGameId = recentGames[0];
-    console.log(
-      'Updated Initial Game and Summoner:',
-      this.initialSummonerGameId,
-      this.initialSummonerPuuid,
-    );
-  }
-
   // 매분마다 실행되는 크론 작업
   @Cron('* * * * *')
   async fetchMatches() {
-    if (!this.initialSummonerGameId) {
-      console.log('Initial game ID not set.');
-      return;
-    }
-
     try {
-      // 초기 게임에서 참여한 소환사들의 게임 정보 가져오기
+      // 초기 게임에 참여한 소환사들의 게임 정보 가져오기
       const matchDetails = await this.rAPI.matchV5.getMatchById({
         cluster: PlatformId.ASIA,
-        matchId: this.initialSummonerGameId,
+        matchId: this.initialMatchId,
       });
 
-      // 해당 게임에 참여한 1~10명의 소환사의 최근 게임 정보 조회
-      for (const participant of matchDetails.info.participants.slice(0, 2)) {
-        const recentGameId = await this.fetchRecentGameIdByPuuid(
+      // matchId를 저장할 리스트
+      const allRecentGameIds = [];
+
+      // 초기 게임에 참여한 소환사 10명에 대해 반복
+      for (const participant of matchDetails.info.participants) {
+        // 소환사의 최근 게임 2개 조회
+        const recentGameIds = await this.fetchRecentGamesByPuuid(
           participant.puuid,
-        );
-        console.log(
-          `Recent game for ${participant.summonerName}: ${recentGameId}`,
+          2,
         );
 
-        if (recentGameId) {
-          const participantDetails = await this.rAPI.matchV5.getMatchById({
-            cluster: PlatformId.ASIA,
-            matchId: recentGameId,
+        for (const recentGameId of recentGameIds) {
+          // matchId 중복 체크
+          const isAlreadySaved = await this.prisma.match.findUnique({
+            where: { matchId: recentGameId },
           });
 
-          // 해당 참가자의 최근 게임의 모든 참가자들의 최근 게임을 조회하여 저장
-          for (const subParticipant of participantDetails.info.participants) {
-            const subRecentGameId = await this.fetchRecentGameIdByPuuid(
-              subParticipant.puuid,
-            );
-            if (subRecentGameId) {
-              const subParticipantDetails =
-                await this.rAPI.matchV5.getMatchById({
-                  cluster: PlatformId.ASIA,
-                  matchId: subRecentGameId,
-                });
-              await this.saveGameDataAndParticipants(subParticipantDetails);
-            }
+          if (!isAlreadySaved) {
+            // matchId 리스트에 저장
+            allRecentGameIds.push(recentGameId);
+            // 게임 조회
+            const participantDetails = await this.rAPI.matchV5.getMatchById({
+              cluster: PlatformId.ASIA,
+              matchId: recentGameId,
+            });
+            // 디비에 게임 정보 저장
+            await this.saveGameDataAndParticipants(participantDetails);
           }
         }
       }
-      const randomParticipant =
-        matchDetails.info.participants[
-          Math.floor(Math.random() * matchDetails.info.participants.length)
-        ];
-      await this.updateInitialSummoner(
-        randomParticipant.summonerName,
-        randomParticipant.riotIdTagline,
-      );
+
+      // 조회한 매치 아이디 중 하나를 랜덤으로 초기 매치 아이디로 지정
+      if (allRecentGameIds.length > 0) {
+        const randomIndex = Math.floor(Math.random() * allRecentGameIds.length);
+        this.initialMatchId = allRecentGameIds[randomIndex];
+      }
     } catch (error) {
       console.error('Error fetching matches:', error);
     }
   }
 
-  async fetchRecentGameIdByPuuid(puuid: string): Promise<string | null> {
+  // 최근 게임 조회
+  async fetchRecentGamesByPuuid(
+    puuid: string,
+    count: number,
+  ): Promise<string[]> {
     const games = await this.rAPI.matchV5.getIdsByPuuid({
       cluster: PlatformId.ASIA,
       puuid: puuid,
-      params: { start: 0, count: 1 },
+      params: { start: 0, count: count },
     });
-    return games[0]; // 가장 최근 게임 ID 반환
+    return games;
   }
 
   async saveGameDataAndParticipants(
@@ -221,7 +183,7 @@ export class RiotService {
       const { dataVersion, matchId } = gameDetails.metadata; // 메타데이터에서 매치 정보 추출
       const participants = gameDetails.info.participants; // 참가자 정보 추출
 
-      // 매치 레코드 생성 또는 업데이트
+      // 경기 정보 match 테이블에 저장
       await this.prisma.match.upsert({
         where: { matchId: matchId },
         update: { dataVersion: dataVersion },
@@ -231,9 +193,8 @@ export class RiotService {
         },
       });
 
-      // 각 참가자에 대한 Summoner 레코드 관리
+      // 각 참가자를 Summoner 테이블에 저장
       for (const participant of participants) {
-        // 각 참가자의 Summoner 레코드 생성 또는 업데이트
         const summoner = await this.prisma.summoner.upsert({
           where: { puuid: participant.puuid },
           update: {
@@ -247,7 +208,7 @@ export class RiotService {
           },
         });
 
-        // 매치와 소환사를 연결하는 참가자 항목 생성
+        // 매치와 소환사를 participant 테이블에 저장 (참여 기록)
         await this.prisma.participant.create({
           data: {
             matchId: matchId,
@@ -255,7 +216,6 @@ export class RiotService {
           },
         });
       }
-
       console.log(
         `Game data and participant information has been saved for match ID: ${matchId}.`,
       );
