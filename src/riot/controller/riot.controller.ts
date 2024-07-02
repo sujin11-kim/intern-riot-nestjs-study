@@ -7,8 +7,13 @@ export class RiotController {
 
   // controller - 경기 리스트 반환
   @Get('/matches')
-  async getAllMatches() {
-    return this.riotService.getAllMatches();
+  async getAllMatches(
+    @Query('page') page: string = '1',
+    @Query('pageSize') pageSize: string = '10',
+  ) {
+    const pageNumber = parseInt(page, 10);
+    const pageSizeNumber = parseInt(pageSize, 10);
+    return this.riotService.getAllMatches(pageNumber, pageSizeNumber);
   }
 
   // controller - 경기에 참가한 소환사 조회

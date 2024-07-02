@@ -19,15 +19,32 @@ export class RiotService {
   }
 
   // controller - 경기 리스트 반환
-  async getAllMatches() {
+  async getAllMatches(page: number, pageSize: number) {
     try {
+      const skip = (page - 1) * pageSize; // 건너뛸 항목 수 계산
       const matches = await this.prisma.match.findMany({
-        select: { matchId: true }, // 디비에 저장된 matchId 조회
+        // 디비에 저장된 경기 조회
+        skip: skip,
+        take: pageSize,
+        include: {
+          participants: {
+            select: {
+              summonerPuuid: true, // 참가자의 소환사 PUUID만 조회
+            },
+          },
+        },
       });
 
-      const matchIds = matches.map((match) => match.matchId); // 리스트로 생성
+      // 경기 참가자 리스트 형태로 수정
+      const matchList = matches.map((match) => ({
+        matchId: match.matchId,
+        dataVersion: match.dataVersion,
+        participants: match.participants.map(
+          (participant) => participant.summonerPuuid,
+        ),
+      }));
 
-      return { matchIds }; // matchId 리스트 반환
+      return { matchList };
     } catch (error) {
       console.error('Error retrieving all matches:', error);
       throw new Error('Failed to retrieve matches');
