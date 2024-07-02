@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Param } from '@nestjs/common';
 import { RiotService } from '../service/riot.service';
 
 @Controller('riot')
@@ -8,5 +8,10 @@ export class RiotController {
   @Get('/matches')
   async getAllMatches() {
     return this.riotService.getAllMatches();
+  }
+
+  @Get('/matches/:matchId/summoners')
+  async getSummonersByMatchId(@Param('matchId') matchId: string) {
+    return this.riotService.getSummonersByMatchId(matchId);
   }
 }

@@ -34,6 +34,19 @@ export class RiotService {
     }
   }
 
+  async getSummonersByMatchId(matchId: string) {
+    try {
+      const participants = await this.prisma.participant.findMany({
+        where: { matchId: matchId },
+      });
+
+      return { participants }; // 'summoners' 키로 puuid 리스트 반환
+    } catch (error) {
+      console.error('Error retrieving summoners by match ID:', error);
+      throw new Error('Failed to retrieve summoners');
+    }
+  }
+
   // 모듈이 초기화될 때 자동으로 실행, 초기 소환사 지정
   async onModuleInit() {
     try {
